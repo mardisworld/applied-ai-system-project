@@ -9,7 +9,7 @@ You will implement the functions in recommender.py:
 - recommend_songs
 """
 
-from recommender import load_songs, recommend_songs
+from src.recommender import load_songs, recommend_songs
 
 
 def main() -> None:
@@ -18,10 +18,10 @@ def main() -> None:
     # Enhanced user profile with category-aware preferences
     user_prefs = {
         # Core preferences (original)
-        "favorite_genre": "pop",
-        "favorite_mood": "happy",
-        "target_energy": 0.8,
-        "likes_acoustic": False,
+        "favorite_genre": "emo",  # Back to emo
+        "favorite_mood": "happy",  # Changed to happy
+        "target_energy": 0.8,  # Higher energy
+        "likes_acoustic": False,  # Dislikes acoustic
         
         # New category-aware preferences
         "favorite_detailed_mood": "upbeat",
@@ -36,11 +36,11 @@ def main() -> None:
         "target_popularity": 70,
         
         # Weights for scoring (customize to prioritize different attributes)
-        "weight_genre": 10.0,
+        "weight_genre": 0.5,
         "weight_mood": 5.0,
         "weight_detailed_mood": 3.0,
         "weight_energy": 5.0,
-        "weight_tempo": 2.0,
+        "weight_tempo": 10.0,
         "weight_valence": 2.0,
         "weight_danceability": 3.0,
         "weight_acousticness": 5.0,

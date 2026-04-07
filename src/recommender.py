@@ -167,20 +167,21 @@ class Recommender:
         else:
             return "This song was recommended based on overall similarity."
 
+
 def load_songs(csv_path: str) -> List[Dict]:
     """
     Loads songs from a CSV file.
-    Required by src/main.py
+    Required by src.main.py
     """
     import csv
 
-    def to_float(value: Optional[str]) -> Optional[float]:
+    def to_float(value: Optional[str]) -> float:
         if value is None or value == "":
-            return None
+            return 0.0
         try:
             return float(value)
         except ValueError:
-            return None
+            return 0.0
 
     def to_int(value: Optional[str]) -> Optional[int]:
         if value is None or value == "":
@@ -218,11 +219,11 @@ def load_songs(csv_path: str) -> List[Dict]:
 def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
     """
     Functional implementation of the recommendation logic.
-    Required by src/main.py
+    Required by src.main.py
     Uses the same weighted Scoring Rule and Ranking Rule as the OOP version.
     """
     def lookup(key: str, fallback: Optional[str] = None) -> Optional[str]:
-        return user_prefs.get(key) or user_prefs.get(fallback)
+        return user_prefs.get(key) or (user_prefs.get(fallback) if fallback else None)
 
     def score_song(song: Dict) -> float:
         score = 0.0
@@ -232,41 +233,41 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
             score += float(user_prefs.get("weight_mood", 5.0))
         if lookup("favorite_detailed_mood") and song.get("detailed_mood") == lookup("favorite_detailed_mood"):
             score += float(user_prefs.get("weight_detailed_mood", 0.0))
-        
+
         energy_target = float(user_prefs.get("target_energy", user_prefs.get("energy", 0.0)))
         energy_diff = abs(song.get("energy", 0.0) - energy_target)
         score += float(user_prefs.get("weight_energy", 5.0)) * (1 - energy_diff)
-        
+
         tempo_target = float(user_prefs.get("target_tempo", 0.0))
         tempo_diff = abs(song.get("tempo_bpm", 0.0) - tempo_target)
         score += float(user_prefs.get("weight_tempo", 0.0)) * (1 - min(tempo_diff / 140, 1))
-        
+
         valence_diff = abs(song.get("valence", 0.0) - float(user_prefs.get("target_valence", 0.0)))
         score += float(user_prefs.get("weight_valence", 0.0)) * (1 - valence_diff)
-        
+
         danceability_diff = abs(song.get("danceability", 0.0) - float(user_prefs.get("target_danceability", 0.0)))
         score += float(user_prefs.get("weight_danceability", 0.0)) * (1 - danceability_diff)
-        
+
         likes_acoustic = user_prefs.get("likes_acoustic", False)
         if likes_acoustic:
             acoustic_score = song.get("acousticness", 0.0)
         else:
             acoustic_score = 1 - song.get("acousticness", 0.0)
         score += float(user_prefs.get("weight_acousticness", 5.0)) * acoustic_score
-        
+
         if lookup("preferred_energy_level") and song.get("energy_level") == lookup("preferred_energy_level"):
             score += float(user_prefs.get("weight_energy_level", 0.0))
         if lookup("preferred_danceability_tier") and song.get("danceability_tier") == lookup("preferred_danceability_tier"):
             score += float(user_prefs.get("weight_danceability_tier", 0.0))
         if lookup("preferred_tempo_category") and song.get("tempo_category") == lookup("preferred_tempo_category"):
             score += float(user_prefs.get("weight_tempo_category", 0.0))
-        
+
         popularity = song.get("popularity")
         if popularity is not None and float(user_prefs.get("weight_popularity", 0.0)) > 0:
             popularity_target = float(user_prefs.get("target_popularity", 0.0))
             popularity_diff = abs(popularity - popularity_target) / 100.0
             score += float(user_prefs.get("weight_popularity", 0.0)) * (1 - min(popularity_diff, 1))
-        
+
         return score
 
     def explain(song: Dict) -> str:
@@ -277,37 +278,37 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
             reasons.append("matches your favorite mood")
         if lookup("favorite_detailed_mood") and song.get("detailed_mood") == lookup("favorite_detailed_mood"):
             reasons.append("matches your detailed mood")
-        
+
         energy_target = float(user_prefs.get("target_energy", user_prefs.get("energy", 0.0)))
         energy_diff = abs(song.get("energy", 0.0) - energy_target)
         if energy_diff < 0.2:
             reasons.append("has similar energy level")
-        
+
         tempo_diff = abs(song.get("tempo_bpm", 0.0) - float(user_prefs.get("target_tempo", 0.0)))
         if tempo_diff < 20:
             reasons.append("has similar tempo")
-        
+
         valence_diff = abs(song.get("valence", 0.0) - float(user_prefs.get("target_valence", 0.0)))
         if valence_diff < 0.2:
             reasons.append("has similar valence")
-        
+
         danceability_diff = abs(song.get("danceability", 0.0) - float(user_prefs.get("target_danceability", 0.0)))
         if danceability_diff < 0.2:
             reasons.append("has similar danceability")
-        
+
         likes_acoustic = user_prefs.get("likes_acoustic", False)
         if likes_acoustic and song.get("acousticness", 0.0) > 0.5:
             reasons.append("is acoustic")
         elif not likes_acoustic and song.get("acousticness", 0.0) < 0.5:
             reasons.append("is not acoustic")
-        
+
         if lookup("preferred_energy_level") and song.get("energy_level") == lookup("preferred_energy_level"):
             reasons.append("matches your energy level category")
         if lookup("preferred_danceability_tier") and song.get("danceability_tier") == lookup("preferred_danceability_tier"):
             reasons.append("matches your danceability tier")
         if lookup("preferred_tempo_category") and song.get("tempo_category") == lookup("preferred_tempo_category"):
             reasons.append("matches your tempo category")
-        
+
         if reasons:
             return f"This song {', '.join(reasons)}."
         else:
@@ -317,121 +318,3 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored[:k]
 
-
-def load_songs(csv_path: str) -> List[Dict]:
-    """
-    Loads songs from a CSV file.
-    Required by src.main.py
-    """
-    import csv
-
-    def to_float(value: Optional[str]) -> float:
-        if value is None or value == "":
-            return 0.0
-        try:
-            return float(value)
-        except ValueError:
-            return 0.0
-
-    def to_int(value: Optional[str]) -> Optional[int]:
-        if value is None or value == "":
-            return None
-        try:
-            return int(float(value))
-        except ValueError:
-            return None
-
-    songs: List[Dict] = []
-    with open(csv_path, newline="", encoding="utf-8") as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            songs.append({
-                "id": to_int(row.get("id")) or 0,
-                "title": row.get("title", ""),
-                "artist": row.get("artist", ""),
-                "genre": row.get("genre", ""),
-                "mood": row.get("mood", ""),
-                "energy": to_float(row.get("energy")),
-                "tempo_bpm": to_float(row.get("tempo_bpm") or row.get("tempo")),
-                "valence": to_float(row.get("valence")),
-                "danceability": to_float(row.get("danceability")),
-                "acousticness": to_float(row.get("acousticness")),
-                "popularity": to_int(row.get("popularity")),
-                "detailed_mood": row.get("detailed_mood"),
-                "energy_level": row.get("energy_level"),
-                "danceability_tier": row.get("danceability_tier"),
-                "tempo_category": row.get("tempo_category"),
-            })
-    return songs
-
-def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
-    """
-    Functional implementation of the recommendation logic.
-    Required by src/main.py
-    Uses the same weighted Scoring Rule and Ranking Rule as the OOP version.
-    """
-    def score_song(song: Dict) -> float:
-        score = 0.0
-        if song['genre'] == user_prefs.get('favorite_genre'):
-            score += user_prefs.get('weight_genre', 10.0)
-        if song['mood'] == user_prefs.get('favorite_mood'):
-            score += user_prefs.get('weight_mood', 5.0)
-        
-        energy_diff = abs(song['energy'] - user_prefs.get('target_energy', 0.0))
-        score += user_prefs.get('weight_energy', 5.0) * (1 - energy_diff)
-        
-        tempo_diff = abs(song['tempo_bpm'] - user_prefs.get('target_tempo', 0.0))
-        score += user_prefs.get('weight_tempo', 0.0) * (1 - min(tempo_diff / 140, 1))
-        
-        valence_diff = abs(song['valence'] - user_prefs.get('target_valence', 0.0))
-        score += user_prefs.get('weight_valence', 0.0) * (1 - valence_diff)
-        
-        danceability_diff = abs(song['danceability'] - user_prefs.get('target_danceability', 0.0))
-        score += user_prefs.get('weight_danceability', 0.0) * (1 - danceability_diff)
-        
-        likes_acoustic = user_prefs.get('likes_acoustic', False)
-        if likes_acoustic:
-            acoustic_score = song['acousticness']
-        else:
-            acoustic_score = 1 - song['acousticness']
-        score += user_prefs.get('weight_acousticness', 5.0) * acoustic_score
-        
-        return score
-
-    def explain(song: Dict) -> str:
-        reasons = []
-        if song['genre'] == user_prefs.get('favorite_genre'):
-            reasons.append("matches your favorite genre")
-        if song['mood'] == user_prefs.get('favorite_mood'):
-            reasons.append("matches your favorite mood")
-        
-        energy_diff = abs(song['energy'] - user_prefs.get('target_energy', 0.0))
-        if energy_diff < 0.2:
-            reasons.append("has similar energy level")
-        
-        tempo_diff = abs(song['tempo_bpm'] - user_prefs.get('target_tempo', 0.0))
-        if tempo_diff < 20:
-            reasons.append("has similar tempo")
-        
-        valence_diff = abs(song['valence'] - user_prefs.get('target_valence', 0.0))
-        if valence_diff < 0.2:
-            reasons.append("has similar valence")
-        
-        danceability_diff = abs(song['danceability'] - user_prefs.get('target_danceability', 0.0))
-        if danceability_diff < 0.2:
-            reasons.append("has similar danceability")
-        
-        likes_acoustic = user_prefs.get('likes_acoustic', False)
-        if likes_acoustic and song['acousticness'] > 0.5:
-            reasons.append("is acoustic")
-        elif not likes_acoustic and song['acousticness'] < 0.5:
-            reasons.append("is not acoustic")
-        
-        if reasons:
-            return f"This song {', '.join(reasons)}."
-        else:
-            return "This song was recommended based on overall similarity."
-
-    scored = [(song, score_song(song), explain(song)) for song in songs]
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return scored[:k]
