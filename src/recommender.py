@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import ABC
 from typing import Any, Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
