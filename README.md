@@ -17,9 +17,14 @@ Your goal is to:
 
 ## Real World Recommendation Systems
 Collaborative filtering and content-based filtering represent two fundamentally different philosophies for predicting what someone will enjoy. Collaborative filtering is entirely social in nature — it ignores the content itself and focuses purely on patterns of human behavior. 
+
 The system looks at what you've listened to, skipped, saved, or replayed, then finds other users whose behavior closely mirrors yours. From there, it recommends things those "taste twins" loved that you haven't encountered yet. The underlying assumption is that if two people agreed on hundreds of songs in the past, they'll probably agree on the next one too. This makes it remarkably good at serendipitous, cross-genre discovery — but it struggles with new users who have no history, and new songs that have no listeners yet.
-Content-based filtering sidesteps that problem entirely by analyzing the intrinsic attributes of the content itself rather than relying on other people's opinions. For music, this means breaking a song down into measurable features — tempo, key, loudness, energy, danceability, emotional valence, and even the instruments present — and building a kind of sonic fingerprint for it. The system then recommends songs whose fingerprints closely match those of tracks you've already enjoyed.
+
+Content-based filtering sidesteps that problem entirely by analyzing the intrinsic attributes of the content itself rather than relying on other people's opinions. For music, this means breaking a song down into measurable features — tempo, key, loudness, energy, danceability, emotional valence, and even the instruments present — and building a kind of sonic fingerprint for it. 
+
+The system then recommends songs whose fingerprints closely match those of tracks you've already enjoyed.
 Because it reasons from the music's own attributes, it works even for obscure or brand-new tracks with no listening data behind them. The tradeoff, however, is that it can trap you in a narrow stylistic bubble, surfacing music that sounds similar to what you know without ever pushing you toward something genuinely surprising. 
+
 In practice, the most sophisticated recommendation systems layer both approaches together — using collaborative filtering for broad discovery and content-based filtering to fine-tune the match — supplemented by natural language processing, engagement signals, and deep learning to capture nuances that neither method alone can fully address.
 
 ## System Design Explanation: Music Recommender Simulation
@@ -87,7 +92,6 @@ Sort Songs by Score (descending) → Top k Recommendations
 ```
 
 - How do you choose which songs to recommend?
-
 After scoring all songs in the catalog, the system sorts them by total score in descending order (highest scores first). It then returns the top k songs (default: 5) as recommendations, along with their scores and human-readable explanations of why they matched the user's profile.
 
 ---
@@ -138,11 +142,14 @@ When weight_mood was reduced to 1.0, the top songs switched to happy emo tracks 
 
 - What happened when you added tempo or valence to the score?
 When tempo and valence weights were set to 0 (effectively removing them from scoring), song scores dropped significantly (from ~39 to ~27), and recommendations shifted to different tracks like "Du riechst so gut" and "My Paradise" that matched other attributes but not necessarily tempo/valence.
+
 With tempo weight at 10.0 and valence at 2.0, scores increased by 10-12 points for songs with similar tempo (target: 120 BPM) and valence (target: 0.75), prioritizing upbeat, positive songs. This demonstrates how numerical similarity attributes can dramatically alter rankings when weighted heavily, allowing fine-tuning of recommendations beyond categorical matches.
 
-- How did your system behave for different types of users
+- How did your system behave for different types of users?
 For users preferring chill, low-energy, acoustic music (e.g., favorite_mood='chill', target_energy=0.5, likes_acoustic=True): The system recommended diverse acoustic songs from various cultures and languages (e.g., Japanese "ただ声一つ", Portuguese "Exu"), prioritizing mood and acoustic matches over genre.
+
 For users liking happy, high-energy, non-acoustic emo (e.g., favorite_genre='emo', favorite_mood='happy', target_energy=0.8, likes_acoustic=False): It recommended upbeat emo tracks (e.g., "This Is Why", "Carry Me Away"), matching genre and mood with high scores due to multiple attribute alignments.
+
 The system adapts recommendations based on weighted preferences, favoring songs that match categorical preferences (genre, mood) and numerical similarities (energy, acousticness), leading to personalized results for different taste profiles.
 
 ---
@@ -172,6 +179,7 @@ Write 1 to 2 paragraphs here about what you learned:
 - How do recommenders turn data into predictions?
 
 Recommender systems turn data into predictions by translating user preferences and item attributes into a common language—numbers. For content-based recommenders like this project, each song is represented by a set of features (genre, mood, energy, tempo, etc.), and each user has a profile describing their ideal values for those features. 
+
 The system computes a score for every song by measuring how closely its features match the user's preferences, often using weighted sums or similarity functions. The highest-scoring items are predicted to be the best matches and are recommended first. In collaborative filtering, predictions are made by finding users with similar tastes and recommending items those users liked, even if the features are unknown. In both cases, the system uses patterns in the data—either content or behavior—to estimate what the user will enjoy next.
 
 - Where can bias or unfairness show up in systems like this?
