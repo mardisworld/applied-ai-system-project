@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.recommender import Song, UserProfile, Recommender, recommend_songs
+from src.recommender import Song, UserProfile, Recommender, available_strategy_names, get_ranking_strategy, recommend_songs
 
 def make_small_recommender() -> Recommender:
     songs = [
@@ -110,6 +110,217 @@ def test_functional_recommend_songs_respects_detailed_mood_weight():
     recommendations = recommend_songs(user_prefs, songs, k=2)
     assert recommendations[0][0]["id"] == 1
     assert recommendations[1][0]["id"] == 2
+
+
+def test_strategy_registry_exposes_switchable_modes():
+    strategy_names = available_strategy_names()
+
+    assert "balanced" in strategy_names
+    assert "genre-first" in strategy_names
+    assert "mood-first" in strategy_names
+    assert "energy-focused" in strategy_names
+    assert get_ranking_strategy("genre-first").name == "genre-first"
+
+
+def test_genre_first_and_mood_first_can_rank_same_songs_differently():
+    songs = [
+        {
+            "id": 1,
+            "title": "Genre Match",
+            "artist": "Artist 1",
+            "genre": "emo",
+            "mood": "intense",
+            "energy": 0.7,
+            "tempo_bpm": 110,
+            "valence": 0.4,
+            "danceability": 0.5,
+            "acousticness": 0.2,
+        },
+        {
+            "id": 2,
+            "title": "Mood Match",
+            "artist": "Artist 2",
+            "genre": "pop",
+            "mood": "happy",
+            "energy": 0.7,
+            "tempo_bpm": 110,
+            "valence": 0.75,
+            "danceability": 0.5,
+            "acousticness": 0.2,
+        },
+    ]
+    user_prefs = {
+        "favorite_genre": "emo",
+        "favorite_mood": "happy",
+        "target_energy": 0.7,
+        "target_valence": 0.75,
+        "likes_acoustic": False,
+        "weight_genre": 4.0,
+        "weight_mood": 4.0,
+        "weight_energy": 1.0,
+        "weight_valence": 1.0,
+    }
+
+    genre_first_results = recommend_songs(user_prefs, songs, k=2, strategy_name="genre-first")
+    mood_first_results = recommend_songs(user_prefs, songs, k=2, strategy_name="mood-first")
+
+    assert genre_first_results[0][0]["title"] == "Genre Match"
+    assert mood_first_results[0][0]["title"] == "Mood Match"
+
+
+def test_energy_focused_strategy_prioritizes_energy_alignment():
+    songs = [
+        {
+            "id": 1,
+            "title": "Exact Energy Match",
+            "artist": "Artist 1",
+            "genre": "indie",
+            "mood": "moody",
+            "energy": 0.9,
+            "tempo_bpm": 128,
+            "valence": 0.6,
+            "danceability": 0.75,
+            "acousticness": 0.2,
+        },
+        {
+            "id": 2,
+            "title": "Genre Match Only",
+            "artist": "Artist 2",
+            "genre": "emo",
+            "mood": "happy",
+            "energy": 0.4,
+            "tempo_bpm": 90,
+            "valence": 0.3,
+            "danceability": 0.4,
+            "acousticness": 0.3,
+        },
+    ]
+    user_prefs = {
+        "favorite_genre": "emo",
+        "favorite_mood": "happy",
+        "target_energy": 0.9,
+        "target_tempo": 128,
+        "likes_acoustic": False,
+        "weight_genre": 3.0,
+        "weight_mood": 3.0,
+        "weight_energy": 4.0,
+        "weight_tempo": 3.0,
+    }
+
+    results = recommend_songs(user_prefs, songs, k=2, strategy_name="energy-focused")
+
+    assert results[0][0]["title"] == "Exact Energy Match"
+
+
+def test_recommend_applies_artist_diversity_penalty_to_top_results():
+    songs = [
+        Song(
+            id=1,
+            title="Artist A Song 1",
+            artist="Artist A",
+            genre="pop",
+            mood="happy",
+            energy=0.8,
+            tempo_bpm=120,
+            valence=0.8,
+            danceability=0.8,
+            acousticness=0.1,
+        ),
+        Song(
+            id=2,
+            title="Artist A Song 2",
+            artist="Artist A",
+            genre="pop",
+            mood="happy",
+            energy=0.79,
+            tempo_bpm=121,
+            valence=0.79,
+            danceability=0.79,
+            acousticness=0.1,
+        ),
+        Song(
+            id=3,
+            title="Artist B Song 1",
+            artist="Artist B",
+            genre="pop",
+            mood="happy",
+            energy=0.76,
+            tempo_bpm=118,
+            valence=0.76,
+            danceability=0.76,
+            acousticness=0.1,
+        ),
+    ]
+    user = UserProfile(
+        favorite_genre="pop",
+        favorite_mood="happy",
+        target_energy=0.8,
+        target_tempo=120,
+        likes_acoustic=False,
+        diversity_artist_penalty=6.0,
+        diversity_genre_penalty=0.0,
+    )
+    rec = Recommender(songs)
+
+    results = rec.recommend(user, k=2)
+
+    assert results[0].artist == "Artist A"
+    assert results[1].artist == "Artist B"
+
+
+def test_functional_recommend_songs_applies_artist_diversity_penalty():
+    songs = [
+        {
+            "id": 1,
+            "title": "Artist A Song 1",
+            "artist": "Artist A",
+            "genre": "pop",
+            "mood": "happy",
+            "energy": 0.8,
+            "tempo_bpm": 120,
+            "valence": 0.8,
+            "danceability": 0.8,
+            "acousticness": 0.1,
+        },
+        {
+            "id": 2,
+            "title": "Artist A Song 2",
+            "artist": "Artist A",
+            "genre": "pop",
+            "mood": "happy",
+            "energy": 0.79,
+            "tempo_bpm": 121,
+            "valence": 0.79,
+            "danceability": 0.79,
+            "acousticness": 0.1,
+        },
+        {
+            "id": 3,
+            "title": "Artist B Song 1",
+            "artist": "Artist B",
+            "genre": "pop",
+            "mood": "happy",
+            "energy": 0.76,
+            "tempo_bpm": 118,
+            "valence": 0.76,
+            "danceability": 0.76,
+            "acousticness": 0.1,
+        },
+    ]
+    user_prefs = {
+        "favorite_genre": "pop",
+        "favorite_mood": "happy",
+        "target_energy": 0.8,
+        "target_tempo": 120,
+        "likes_acoustic": False,
+        "diversity_artist_penalty": 6.0,
+        "diversity_genre_penalty": 0.0,
+    }
+
+    recommendations = recommend_songs(user_prefs, songs, k=2)
+
+    assert recommendations[0][0]["artist"] == "Artist A"
+    assert recommendations[1][0]["artist"] == "Artist B"
 
 
 # Project profile regression tests
