@@ -1,105 +1,19 @@
-"""
-Command line runner for the Music Recommender Simulation.
+"""Command line runner for the Music Recommender Simulation."""
 
-This file helps you quickly run and test your recommender.
-
-You will implement the functions in recommender.py:
-- load_songs
-- score_song
-- recommend_songs
-"""
-
+import argparse
+import json
 import textwrap
 
+from src.llm_client import generate_grounded_recommendation_text, llm_is_configured
 from src.recommender import available_strategy_names, load_songs, recommend_songs
+from src.retrieval import (
+    RetrievalLayer,
+    build_user_preferences_from_retrieval_context,
+    candidate_tracks_to_song_dicts,
+)
 
 
-PROFILE_PRESETS = {
-    "subtle-differences": {
-        "favorite_genre": "emo",
-        "favorite_mood": "happy",
-        "target_energy": 0.8,
-        "likes_acoustic": False,
-        "favorite_detailed_mood": "upbeat",
-        "preferred_energy_level": "High",
-        "preferred_danceability_tier": "Danceable",
-        "preferred_tempo_category": "Upbeat",
-        "target_tempo": 120,
-        "target_valence": 0.75,
-        "target_danceability": 0.7,
-        "target_popularity": 70,
-        "weight_genre": 0.5,
-        "weight_mood": 5.0,
-        "weight_detailed_mood": 3.0,
-        "weight_energy": 5.0,
-        "weight_tempo": 10.0,
-        "weight_valence": 2.0,
-        "weight_danceability": 3.0,
-        "weight_acousticness": 5.0,
-        "weight_energy_level": 2.0,
-        "weight_danceability_tier": 2.0,
-        "weight_tempo_category": 2.0,
-        "weight_popularity": 1.0,
-        "diversity_artist_penalty": 6.0,
-        "diversity_genre_penalty": 1.5,
-    },
-    "obvious-strategy-demo": {
-        "favorite_genre": "study",
-        "favorite_mood": "intense",
-        "target_energy": 0.95,
-        "likes_acoustic": False,
-        "favorite_detailed_mood": "aggressive",
-        "preferred_energy_level": "High",
-        "preferred_danceability_tier": "Danceable",
-        "preferred_tempo_category": "Fast",
-        "target_tempo": 150,
-        "target_valence": 0.45,
-        "target_danceability": 0.75,
-        "target_popularity": 60,
-        "weight_genre": 7.0,
-        "weight_mood": 6.0,
-        "weight_detailed_mood": 4.0,
-        "weight_energy": 7.0,
-        "weight_tempo": 8.0,
-        "weight_valence": 2.0,
-        "weight_danceability": 4.0,
-        "weight_acousticness": 5.0,
-        "weight_energy_level": 3.0,
-        "weight_danceability_tier": 2.0,
-        "weight_tempo_category": 3.0,
-        "weight_popularity": 1.0,
-        "diversity_artist_penalty": 6.0,
-        "diversity_genre_penalty": 1.5,
-    },
-    "genre-vs-mood-conflict": {
-        "favorite_genre": "black-metal",
-        "favorite_mood": "happy",
-        "target_energy": 0.9,
-        "likes_acoustic": False,
-        "favorite_detailed_mood": "upbeat",
-        "preferred_energy_level": "High",
-        "preferred_danceability_tier": "Danceable",
-        "preferred_tempo_category": "Fast",
-        "target_tempo": 145,
-        "target_valence": 0.8,
-        "target_danceability": 0.65,
-        "target_popularity": 55,
-        "weight_genre": 6.0,
-        "weight_mood": 6.0,
-        "weight_detailed_mood": 3.0,
-        "weight_energy": 6.0,
-        "weight_tempo": 7.0,
-        "weight_valence": 4.0,
-        "weight_danceability": 3.0,
-        "weight_acousticness": 4.0,
-        "weight_energy_level": 3.0,
-        "weight_danceability_tier": 2.0,
-        "weight_tempo_category": 3.0,
-        "weight_popularity": 1.0,
-        "diversity_artist_penalty": 6.0,
-        "diversity_genre_penalty": 1.5,
-    },
-}
+VALID_RUN_MODES = ("retrieval-only", "llm-only", "hybrid")
 
 
 def format_recommendation_table(table_rows: list[list[str]]) -> str:
@@ -143,32 +57,158 @@ def format_recommendation_table(table_rows: list[list[str]]) -> str:
     return "\n\n".join(sections + [separator])
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the music recommender from a natural-language query.")
+    parser.add_argument(
+        "--mode",
+        choices=VALID_RUN_MODES,
+        default="hybrid",
+        help="Choose retrieval-only, llm-only, or hybrid output.",
+    )
+    parser.add_argument(
+        "--prompt",
+        default=None,
+        help="Natural-language music request. If omitted, the CLI will prompt interactively.",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=available_strategy_names(),
+        default=None,
+        help="Ranking strategy for hybrid mode. If omitted, the CLI will prompt interactively in hybrid mode.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON output instead of formatted console text.",
+    )
+    parser.add_argument(
+        "--no-context",
+        action="store_true",
+        help="When used with --json, omit the serialized retrieval_context block from the output.",
+    )
+    parser.add_argument(
+        "--no-llm-prompt",
+        action="store_true",
+        help="When used with --json, omit the rendered llm_prompt string from the output.",
+    )
+    return parser.parse_args()
+
+
+def _print_json(payload: dict) -> None:
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _serialize_recommendations(recommendations: list[tuple[dict, float, str]]) -> list[dict]:
+    serialized = []
+    for rank, (song, score, explanation) in enumerate(recommendations, start=1):
+        serialized.append(
+            {
+                "rank": rank,
+                "song": song,
+                "score": round(score, 3),
+                "explanation": explanation,
+            }
+        )
+    return serialized
+
+
 def main() -> None:
-    songs = load_songs("data/songs_dataset_full.csv") 
+    args = parse_args()
+    songs = load_songs("data/songs_dataset_full.csv")
+    retrieval_layer = RetrievalLayer(songs)
     strategy_options = available_strategy_names()
-    profile_options = list(PROFILE_PRESETS.keys())
 
-    print("Choose a demo profile:")
-    for option in profile_options:
-        print(f"- {option}")
+    query = (args.prompt or "").strip()
+    if not query:
+        print("Describe what you want to hear.")
+        print("Example: I want something chill for studying, similar to Bon Iver")
+        query = input("Enter prompt: ").strip()
 
-    selected_profile = input("Enter profile name: ").strip().lower()
-    profile_name = selected_profile if selected_profile in PROFILE_PRESETS else "obvious-strategy-demo"
-    if selected_profile and selected_profile not in PROFILE_PRESETS:
-        print(f"Unknown profile '{selected_profile}'. Falling back to '{profile_name}'.\n")
+    if not query:
+        query = "I want something chill for studying, similar to Bon Iver"
+        print(f"Using default prompt: {query}\n")
 
-    print("Choose a ranking strategy:")
-    for option in strategy_options:
-        print(f"- {option}")
+    strategy_mode = args.strategy or "balanced"
+    if args.mode == "hybrid" and args.strategy is None:
+        print("Choose a ranking strategy:")
+        for option in strategy_options:
+            print(f"- {option}")
 
-    selected_strategy = input("Enter strategy name: ").strip().lower()
-    strategy_mode = selected_strategy if selected_strategy in strategy_options else "balanced"
-    if selected_strategy and selected_strategy not in strategy_options:
-        print(f"Unknown strategy '{selected_strategy}'. Falling back to '{strategy_mode}'.\n")
+        selected_strategy = input("Enter strategy name: ").strip().lower()
+        strategy_mode = selected_strategy if selected_strategy in strategy_options else "balanced"
+        if selected_strategy and selected_strategy not in strategy_options:
+            print(f"Unknown strategy '{selected_strategy}'. Falling back to '{strategy_mode}'.\n")
 
-    user_prefs = PROFILE_PRESETS[profile_name].copy()
+    if args.mode == "llm-only" and not args.json and not llm_is_configured():
+        raise SystemExit("LLM mode requires LLM_API_KEY or OPENAI_API_KEY to be set.")
 
-    recommendations = recommend_songs(user_prefs, songs, k=5, strategy_name=strategy_mode)
+    retrieval_context = retrieval_layer.retrieve(query, candidate_limit=15, similar_artist_limit=5)
+    result_payload = {
+        "prompt": query,
+        "mode": args.mode,
+        "strategy": strategy_mode if args.mode == "hybrid" else None,
+        "llm_recommendations": None,
+        "local_recommendations": None,
+    }
+
+    if not (args.json and args.no_context):
+        result_payload["retrieval_context"] = retrieval_context.to_dict()
+
+    if not (args.json and args.no_llm_prompt):
+        result_payload["llm_prompt"] = retrieval_context.to_llm_prompt(recommendation_count=5)
+
+    if not args.json:
+        print("\nRetrieved context:\n")
+        print(retrieval_context.to_context_string())
+        print("\nLLM-ready prompt:\n")
+        print(retrieval_context.to_llm_prompt(recommendation_count=5))
+
+    if args.mode in {"llm-only", "hybrid"}:
+        if not llm_is_configured():
+            if args.mode == "llm-only":
+                error_message = "LLM mode requires LLM_API_KEY or OPENAI_API_KEY to be set."
+                if args.json:
+                    result_payload["error"] = error_message
+                    _print_json(result_payload)
+                    return
+                raise SystemExit(error_message)
+        else:
+            try:
+                llm_recommendation_text = generate_grounded_recommendation_text(
+                    retrieval_context,
+                    recommendation_count=5,
+                )
+            except RuntimeError as exc:
+                result_payload["error"] = str(exc)
+                if not args.json:
+                    print("\nLLM recommendation call failed:\n")
+                    print(str(exc))
+                if args.mode == "llm-only":
+                    if args.json:
+                        _print_json(result_payload)
+                        return
+                    raise SystemExit(1) from exc
+            else:
+                result_payload["llm_recommendations"] = llm_recommendation_text
+                if not args.json:
+                    print("\nLLM-generated recommendations:\n")
+                    print(llm_recommendation_text)
+
+    if args.mode == "retrieval-only":
+        if args.json:
+            _print_json(result_payload)
+        return
+
+    if args.mode == "llm-only":
+        if args.json:
+            _print_json(result_payload)
+        return
+
+    user_prefs = build_user_preferences_from_retrieval_context(retrieval_context)
+    candidate_songs = candidate_tracks_to_song_dicts(retrieval_context) or songs
+
+    recommendations = recommend_songs(user_prefs, candidate_songs, k=5, strategy_name=strategy_mode)
+    result_payload["local_recommendations"] = _serialize_recommendations(recommendations)
 
     table_rows = []
     for index, rec in enumerate(recommendations, start=1):
@@ -184,8 +224,13 @@ def main() -> None:
             ]
         )
 
+    if args.json:
+        _print_json(result_payload)
+        return
+
     print("\nTop recommendations:\n")
-    print(f"Demo profile: {profile_name}")
+    print(f"Prompt: {query}")
+    print(f"Run mode: {args.mode}")
     print(f"Ranking mode: {strategy_mode}")
     print(f"Available modes: {', '.join(available_strategy_names())}\n")
     print(format_recommendation_table(table_rows))

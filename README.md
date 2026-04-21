@@ -119,6 +119,122 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
+The CLI now accepts a natural-language music request, such as `I want something chill for studying, similar to Bon Iver`, then retrieves candidate tracks and ranks them with the recommender.
+
+You can also choose the output mode explicitly:
+
+```bash
+python -m src.main --mode retrieval-only --prompt "I want something chill for studying, similar to Bon Iver"
+python -m src.main --mode llm-only --prompt "I want something chill for studying, similar to Bon Iver"
+python -m src.main --mode hybrid --prompt "I want something chill for studying, similar to Bon Iver" --strategy balanced
+python -m src.main --mode hybrid --prompt "I want something chill for studying, similar to Bon Iver" --strategy balanced --json
+python -m src.main --mode hybrid --prompt "I want something chill for studying, similar to Bon Iver" --strategy balanced --json --no-context
+python -m src.main --mode hybrid --prompt "I want something chill for studying, similar to Bon Iver" --strategy balanced --json --no-context --no-llm-prompt
+```
+
+Mode behavior:
+
+1. `retrieval-only`: prints retrieved context and the LLM-ready prompt, but does not call the model or the local ranker.
+2. `llm-only`: prints retrieved context, the LLM-ready prompt, and the grounded LLM response. Requires `LLM_API_KEY` or `OPENAI_API_KEY`.
+3. `hybrid`: prints retrieved context, optional LLM output if configured, and the local ranked recommendations.
+
+Add `--json` to any mode to emit a single machine-readable JSON object with:
+
+1. `prompt`
+2. `mode`
+3. `strategy`
+4. `retrieval_context`
+5. `llm_prompt`
+6. `llm_recommendations`
+7. `local_recommendations`
+8. optional `error`
+
+Add `--no-context` alongside `--json` to omit the `retrieval_context` key entirely when you only need the final recommendation outputs without the large retrieval payload.
+
+Add `--no-llm-prompt` alongside `--json` to omit the `llm_prompt` key entirely when you do not need the rendered grounding prompt in the output.
+
+### Local Artist Metadata Enrichment
+
+This project can enrich the raw dataset with artist metadata derived entirely from the local CSV, without calling the Spotify Web API.
+
+2. Run a small test batch first:
+
+```bash
+python -m src.spotify_enrichment --limit 25
+```
+
+By default the enrichment reads from `data/dataset.csv` and derives artist metadata from the rows already in that file.
+
+3. Run the full enrichment job when the sample looks correct:
+
+```bash
+python -m src.spotify_enrichment
+```
+
+By default this writes [data/song_artist_metadata.csv](/Users/marissastaller/Desktop/2026/CodePath/applied-ai-system-project/data/song_artist_metadata.csv), keyed by `track_id`, with the original track fields plus `primary_artist_id`, `primary_artist_name`, `artist_ids`, `artist_names`, `artist_genres`, `artist_popularity`, `artist_followers_total`, and `artist_spotify_url`.
+
+The derived metadata uses semicolon-separated artist names from the dataset to build stable local artist IDs, combines genres seen for each artist across the processed rows, estimates artist popularity from the average track popularity in the CSV, and leaves Spotify-only fields such as followers and URLs blank.
+
+### Retrieval Layer
+
+The project also includes a local retrieval layer that turns a free-text request into structured recommendation context.
+
+Example:
+
+```python
+from src.retrieval import build_retrieval_context
+
+context = build_retrieval_context(
+  "I want something chill for studying, similar to Bon Iver"
+)
+
+print(context.to_context_string())
+print(context.to_llm_prompt(recommendation_count=5))
+```
+
+The retrieval layer:
+
+1. Parses the query for mood, activity, and a seed artist.
+2. Builds a seed-artist profile from the local song catalog.
+3. Finds locally similar artists using genre overlap and audio-feature similarity.
+4. Returns candidate tracks plus a formatted context block you can pass into a recommendation or LLM step.
+
+The `to_llm_prompt()` helper turns the retrieval result into a grounded prompt, so an LLM sees the original user request plus the retrieved metadata instead of having to guess from the query alone.
+
+### LLM Wrapper
+
+You can send the grounded retrieval prompt to a real model API through the OpenAI-compatible wrapper in [src/llm_client.py](/Users/marissastaller/Desktop/2026/CodePath/applied-ai-system-project/src/llm_client.py).
+
+The wrapper now auto-loads [/.env](/Users/marissastaller/Desktop/2026/CodePath/applied-ai-system-project/.env) from the project root. Put your key there:
+
+```bash
+LLM_API_KEY="your-api-key"
+```
+
+You can still use shell exports if you prefer:
+
+```bash
+export LLM_API_KEY="your-api-key"
+export LLM_BASE_URL="https://api.openai.com/v1"
+export LLM_MODEL="gpt-5.4"
+```
+
+Example:
+
+```python
+from src.llm_client import generate_grounded_recommendation_text
+from src.retrieval import build_retrieval_context
+
+context = build_retrieval_context(
+  "I want something chill for studying, similar to Bon Iver"
+)
+
+response_text = generate_grounded_recommendation_text(context, recommendation_count=5)
+print(response_text)
+```
+
+When `LLM_API_KEY` or `OPENAI_API_KEY` is set, [src/main.py](/Users/marissastaller/Desktop/2026/CodePath/applied-ai-system-project/src/main.py) will also attempt the grounded LLM call automatically and print the generated recommendation text.
+
 ### Running Tests
 
 Run the starter tests with:
