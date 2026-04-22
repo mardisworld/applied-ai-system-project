@@ -119,7 +119,22 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
-The CLI now accepts a natural-language music request, such as `I want something chill for studying, similar to Bon Iver`, then retrieves candidate tracks and ranks them with the recommender.
+The CLI will ask what you want to hear and how you'd like songs ranked:
+
+```
+Describe what you want to hear.
+Example: I want something chill for studying, similar to Bon Iver
+Enter prompt: upbeat pop songs for a workout
+
+How would you like songs to be ranked?
+  1. balanced
+  2. genre-first
+  3. mood-first
+  4. energy-focused
+Enter strategy name or number [balanced]:
+```
+
+After showing recommendations, it will offer to create a Spotify playlist (see **Spotify Playlist Creation** below).
 
 You can also choose the output mode explicitly:
 
@@ -234,6 +249,47 @@ print(response_text)
 ```
 
 When `LLM_API_KEY` or `OPENAI_API_KEY` is set, [src/main.py](/Users/marissastaller/Desktop/2026/CodePath/applied-ai-system-project/src/main.py) will also attempt the grounded LLM call automatically and print the generated recommendation text.
+
+### Spotify Playlist Creation
+
+After the app displays its recommendations, it will offer to create a real Spotify playlist on your account using the Spotify Web API.
+
+#### Setup
+
+1. Create a Spotify app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
+
+2. Under your app's **Edit Settings**, add a redirect URI. Because Spotify requires HTTPS, use an [ngrok](https://ngrok.com) tunnel for local development:
+
+   ```bash
+   brew install ngrok/ngrok/ngrok
+   ngrok http 8888
+   ```
+
+   Copy the `https://...ngrok-free.app` URL shown in the ngrok output and add it as a redirect URI in the Spotify dashboard:
+
+   ```
+   https://your-tunnel.ngrok-free.app/callback
+   ```
+
+3. Add your credentials to `.env`:
+
+   ```
+   SPOTIFY_CLIENT_ID=your-client-id
+   SPOTIFY_CLIENT_SECRET=your-client-secret
+   SPOTIFY_REDIRECT_URI=https://your-tunnel.ngrok-free.app/callback
+   ```
+
+#### How It Works
+
+When you run the app and type `y` at the playlist prompt:
+
+1. Your browser opens Spotify's authorization page automatically.
+2. You click **Agree** to grant `playlist-modify-public`, `playlist-modify-private`, and `user-read-private` scopes.
+3. Spotify redirects to the ngrok URL, which tunnels the callback to the local server.
+4. The app captures the authorization code, exchanges it for an access token, fetches your Spotify profile, and prompts for a playlist name.
+5. It searches Spotify for each recommended song, adds the best match, and prints the playlist URL.
+
+> **Note:** The ngrok URL changes each session on the free tier. Update `.env` and your Spotify dashboard redirect URI each time you restart ngrok.
 
 ### Running Tests
 

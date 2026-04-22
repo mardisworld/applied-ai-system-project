@@ -11,6 +11,14 @@ from src.retrieval import (
     build_user_preferences_from_retrieval_context,
     candidate_tracks_to_song_dicts,
 )
+from src.spotify_api import (
+    build_playlist_from_recommendations,
+    exchange_code_for_token,
+    get_authorization_url,
+    get_current_user,
+    run_local_auth_flow,
+    spotify_is_configured,
+)
 
 
 VALID_RUN_MODES = ("retrieval-only", "llm-only", "hybrid")
@@ -128,16 +136,21 @@ def main() -> None:
         query = "I want something chill for studying, similar to Bon Iver"
         print(f"Using default prompt: {query}\n")
 
-    strategy_mode = args.strategy or "balanced"
-    if args.mode == "hybrid" and args.strategy is None:
-        print("Choose a ranking strategy:")
-        for option in strategy_options:
-            print(f"- {option}")
-
-        selected_strategy = input("Enter strategy name: ").strip().lower()
-        strategy_mode = selected_strategy if selected_strategy in strategy_options else "balanced"
-        if selected_strategy and selected_strategy not in strategy_options:
-            print(f"Unknown strategy '{selected_strategy}'. Falling back to '{strategy_mode}'.\n")
+    strategy_mode = args.strategy
+    if args.mode != "retrieval-only" and args.strategy is None:
+        print("\nHow would you like songs to be ranked?")
+        for i, option in enumerate(strategy_options, start=1):
+            print(f"  {i}. {option}")
+        selected_strategy = input("Enter strategy name or number [balanced]: ").strip().lower()
+        if selected_strategy.isdigit():
+            idx = int(selected_strategy) - 1
+            strategy_mode = strategy_options[idx] if 0 <= idx < len(strategy_options) else "balanced"
+        elif selected_strategy in strategy_options:
+            strategy_mode = selected_strategy
+        else:
+            if selected_strategy:
+                print(f"Unknown strategy '{selected_strategy}'. Using 'balanced'.")
+            strategy_mode = "balanced"
 
     if args.mode == "llm-only" and not args.json and not llm_is_configured():
         raise SystemExit("LLM mode requires LLM_API_KEY or OPENAI_API_KEY to be set.")
@@ -234,6 +247,92 @@ def main() -> None:
     print(f"Ranking mode: {strategy_mode}")
     print(f"Available modes: {', '.join(available_strategy_names())}\n")
     print(format_recommendation_table(table_rows))
+
+    if not args.json:
+        _offer_spotify_playlist(recommendations, query)
+
+
+def _offer_spotify_playlist(
+    recommendations: list[tuple[dict, float, str]],
+    query: str,
+) -> None:
+    """Interactively offer to create a Spotify playlist from the recommendations."""
+    if not spotify_is_configured():
+        print(
+            "\n(Spotify playlist creation is unavailable — "
+            "add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to your .env file.)"
+        )
+        return
+
+    print("\n" + "-" * 78)
+    answer = input("Would you like to create a Spotify playlist from these recommendations? [y/N]: ").strip().lower()
+    if answer not in {"y", "yes"}:
+        print("Skipping playlist creation.")
+        return
+
+    # --- Authorization Code flow (local callback server, works with ngrok tunnel) ---
+    print("\nSpotify will open in your browser. Log in and click 'Agree' to grant access.")
+    try:
+        token_data = run_local_auth_flow()
+    except RuntimeError as exc:
+        print(f"Spotify authorization failed: {exc}")
+        return
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        return
+
+    access_token = (token_data.get("access_token") or "").strip()
+    if not access_token:
+        print("Did not receive an access token. Skipping playlist creation.")
+        return
+
+    # Fetch the user's Spotify profile to get their user ID automatically.
+    print("Fetching your Spotify profile…")
+    try:
+        user_profile = get_current_user(access_token)
+    except RuntimeError as exc:
+        print(f"Could not fetch Spotify profile: {exc}")
+        return
+
+    user_id = (user_profile.get("id") or "").strip()
+    display_name = user_profile.get("display_name") or user_id
+    if not user_id:
+        print("Could not determine your Spotify user ID. Skipping playlist creation.")
+        return
+
+    print(f"Logged in as: {display_name} ({user_id})")
+    granted_scopes = (token_data.get("scope") or "").strip()
+    print(f"Token scopes: {granted_scopes or '(none listed)'}")
+
+    default_name = f"AI Picks: {query[:40]}"
+    playlist_name = input(f"Playlist name [{default_name}]: ").strip() or default_name
+
+    use_ai = llm_is_configured()
+    if use_ai:
+        ai_answer = input("Use AI to refine the track selection before building the playlist? [Y/n]: ").strip().lower()
+        use_ai = ai_answer not in {"n", "no"}
+
+    if use_ai:
+        print("(AI refinement is noted — the recommender scores already incorporate the AI retrieval layer.)")
+
+    print(f"\nBuilding playlist '{playlist_name}'…")
+    try:
+        playlist = build_playlist_from_recommendations(
+            playlist_name=playlist_name,
+            recommendations=recommendations,
+            access_token=access_token,
+            description=f"AI-generated playlist for: {query}",
+            public=True,
+        )
+    except RuntimeError as exc:
+        print(f"Playlist creation failed: {exc}")
+        return
+
+    track_count = playlist.get("track_count", 0)
+    playlist_url = playlist.get("url") or ""
+    print(f"\nPlaylist created with {track_count} track(s)!")
+    if playlist_url:
+        print(f"Open in Spotify: {playlist_url}")
 
 
 if __name__ == "__main__":
