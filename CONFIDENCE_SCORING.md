@@ -49,7 +49,7 @@ The main remaining risks are:
 | `tests/test_retrieval.py`            | 14 | ✅ |
 | `tests/test_spotify_api.py`          | 27 | ✅ |
 | `tests/test_spotify_enrichment.py`   | 7  | ✅ |
-| **Total** | **128** | **✅ 128 / 128**    | 
+| **Total** | **128** | **✅ 128 / 128**  |
 
 Run all tests with:
 

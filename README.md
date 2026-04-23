@@ -431,3 +431,10 @@ Copilot kept telling me to use http as a callback for the Spotify API, even thou
 - Fine-Tuning or Specialization - see scripts/compare_personas.py and write-up in COMPARE_PERSONAS.md.
 - Test Harness or Evaluation Script - see scripts/evaluate.py and write up in EVALUATION_SUMMARY.md.  
 
+# Reflection - What does this project say about me as an AI engineer?
+
+This project shows that I don't just study AI concepts — I build systems that put them together in ways that actually work. I started with a straightforward recommendation system that used a scoring algorithm and I kept layering. First a RAG retrieval pipeline that grounds every recommendation in real audio features, then a persona specialization layer that adjusts the LLM's voice without touching model weights, then an agentic reasoning chain that makes every decision in the pipeline observable and inspectable. 
+Along the way I integrated live third-party APIs — OpenAI and Spotify — dealt with real-world failure modes like OAuth scopes, HTTP 403s, and quota limits, and backed everything with 128 unit and integration tests so I could move fast without breaking what was already working. 
+What I care about most isn't the cleverness of any single component; it's that the system behaves predictably, degrades gracefully when an API key is missing or a model call fails, and is honest about where its confidence is lower. That combination — curiosity about how the pieces fit together, discipline around testing and error handling, and a practical instinct for when something is good enough to ship — is how I approach engineering problems.
+
+# Loom Link: https://www.loom.com/share/fab4f50974a2432fa80cd253d4a19ee2
