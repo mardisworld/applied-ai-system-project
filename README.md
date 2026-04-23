@@ -426,6 +426,7 @@ Copilot kept telling me to use http as a callback for the Spotify API, even thou
 
 # Optional: Stretch Features for Extra Points
 
+- RAG - added Open AI as RAG augmentation
 - Agentic Workflow Enhancement - added agent.py, which runs five discrete steps in order: sanitize, parse, plan, retrieve, rank. 
 - Fine-Tuning or Specialization - see scripts/compare_personas.py and write-up in COMPARE_PERSONAS.md.
 - Test Harness or Evaluation Script - see scripts/evaluate.py and write up in EVALUATION_SUMMARY.md.  

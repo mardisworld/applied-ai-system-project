@@ -195,15 +195,36 @@ def main() -> None:
     retrieval_layer = RetrievalLayer(songs)
     strategy_options = available_strategy_names()
 
+    # ------------------------------------------------------------------ #
+    # Step 1: Ask for ranking strategy first (interactive, non-JSON mode)  #
+    # ------------------------------------------------------------------ #
+    strategy_mode = args.strategy
+    if not args.agent and args.mode != "retrieval-only" and args.strategy is None and not args.json:
+        print("\nHow would you like songs to be ranked?")
+        for i, option in enumerate(strategy_options, start=1):
+            print(f"  {i}. {option}")
+        selected_strategy = input("Enter strategy name or number [balanced]: ").strip().lower()
+        if selected_strategy.isdigit():
+            idx = int(selected_strategy) - 1
+            strategy_mode = strategy_options[idx] if 0 <= idx < len(strategy_options) else "balanced"
+        elif selected_strategy in strategy_options:
+            strategy_mode = selected_strategy
+        else:
+            if selected_strategy:
+                print(f"Unknown strategy '{selected_strategy}'. Using 'balanced'.")
+            strategy_mode = "balanced"
+
+    # ------------------------------------------------------------------ #
+    # Step 2: Collect the user's music preferences                         #
+    # ------------------------------------------------------------------ #
     query = (args.prompt or "").strip()
     if not query:
-        print("Describe what you want to hear.")
-        print("Example: I want something chill for studying, similar to Bon Iver")
-        query = input("Enter prompt: ").strip()
+        print("\nDescribe what music you'd like to hear.")
+        print("Example: upbeat pop for a workout, chill folk for studying, similar to Bon Iver")
+        query = input("Your request: ").strip()
 
     if not query:
-        query = "I want something chill for studying, similar to Bon Iver"
-        print(f"Using default prompt: {query}\n")
+        raise SystemExit("No prompt entered. Please describe what music you'd like to hear.")
 
     try:
         query = sanitize_query(query)
@@ -249,21 +270,11 @@ def main() -> None:
         return
     # ------------------------------------------------------------------ #
 
-    strategy_mode = args.strategy
-    if args.mode != "retrieval-only" and args.strategy is None:
-        print("\nHow would you like songs to be ranked?")
-        for i, option in enumerate(strategy_options, start=1):
-            print(f"  {i}. {option}")
-        selected_strategy = input("Enter strategy name or number [balanced]: ").strip().lower()
-        if selected_strategy.isdigit():
-            idx = int(selected_strategy) - 1
-            strategy_mode = strategy_options[idx] if 0 <= idx < len(strategy_options) else "balanced"
-        elif selected_strategy in strategy_options:
-            strategy_mode = selected_strategy
-        else:
-            if selected_strategy:
-                print(f"Unknown strategy '{selected_strategy}'. Using 'balanced'.")
-            strategy_mode = "balanced"
+    # strategy_mode was already selected above (before the prompt was collected).
+    # Ensure a valid fallback for JSON / agent / retrieval-only paths where
+    # interactive selection was skipped.
+    if strategy_mode is None:
+        strategy_mode = "balanced"
 
     if args.mode == "llm-only" and not args.json and not llm_is_configured():
         raise SystemExit("LLM mode requires LLM_API_KEY or OPENAI_API_KEY to be set.")

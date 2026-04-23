@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 
 DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_LLM_MODEL = "gpt-5.4"
+DEFAULT_LLM_MODEL = "gpt-4o-mini"
 DEFAULT_TIMEOUT_SECONDS = 60
 
 
