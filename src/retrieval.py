@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Protocol
 
+from src.logger import get_logger
 from src.recommender import load_songs
+
+logger = get_logger(__name__)
 
 
 KNOWN_MOODS = {
@@ -684,19 +688,46 @@ class RetrievalLayer:
         candidate_limit: int = 12,
         similar_artist_limit: int = 5,
     ) -> RetrievalContext:
+        logger.debug("Starting retrieval for query: %r", query)
         signals = parse_query_signals(query)
-        seed_profile = self.backend.resolve_seed_artist(signals.seed_artist) if signals.seed_artist else None
+        logger.debug(
+            "Parsed signals — mood=%r, activity=%r, seed_artist=%r",
+            signals.mood, signals.activity, signals.seed_artist,
+        )
+
+        seed_profile = None
+        if signals.seed_artist:
+            seed_profile = self.backend.resolve_seed_artist(signals.seed_artist)
+            if seed_profile:
+                logger.info("Seed artist resolved: %r", seed_profile.artist_name)
+            else:
+                logger.warning(
+                    "Seed artist %r not found in local catalog; falling back to mood/activity signals.",
+                    signals.seed_artist,
+                )
+
         similar_artists = (
             self.backend.find_similar_artists(seed_profile, signals, limit=similar_artist_limit)
             if seed_profile
             else []
         )
+        if similar_artists:
+            logger.debug(
+                "Found %d similar artist(s): %s",
+                len(similar_artists),
+                ", ".join(m.artist_name for m in similar_artists),
+            )
+
         candidate_tracks = self.backend.get_candidate_tracks(
             signals,
             seed_profile,
             similar_artists,
             limit=candidate_limit,
         )
+        logger.info("Retrieved %d candidate track(s).", len(candidate_tracks))
+
+        if not candidate_tracks:
+            logger.warning("No candidate tracks found for query: %r", query)
 
         return RetrievalContext(
             query=query,

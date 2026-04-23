@@ -2,9 +2,12 @@
 
 import argparse
 import json
+import re
 import textwrap
 
-from src.llm_client import generate_grounded_recommendation_text, llm_is_configured
+from src.agent import MusicRecommenderAgent
+from src.llm_client import VALID_PERSONAS, generate_grounded_recommendation_text, llm_is_configured
+from src.logger import configure_logging, get_logger
 from src.recommender import available_strategy_names, load_songs, recommend_songs
 from src.retrieval import (
     RetrievalLayer,
@@ -20,8 +23,39 @@ from src.spotify_api import (
     spotify_is_configured,
 )
 
+logger = get_logger(__name__)
+
 
 VALID_RUN_MODES = ("retrieval-only", "llm-only", "hybrid")
+
+MAX_QUERY_LENGTH = 500
+_INJECTION_RE = re.compile(
+    r"(ignore\b.{0,40}\b(instructions?|prompt|rules|context)\b"
+    r"|repeat\b.{0,30}\b(system\s+prompt|above\s+prompt|previous\s+prompt)\b"
+    r"|act\s+as\b"
+    r"|you\s+are\s+now\b"
+    r"|disregard\b.{0,30}\b(instructions?|prompt|rules|context)\b)",
+    re.IGNORECASE,
+)
+
+
+def sanitize_query(query: str) -> str:
+    """Reject over-long queries and obvious prompt-injection patterns.
+
+    Raises ValueError with a user-facing message if the query is unsafe.
+    The raw query is never logged at ERROR level to avoid leaking injected content.
+    """
+    if len(query) > MAX_QUERY_LENGTH:
+        raise ValueError(
+            f"Query is too long ({len(query)} characters; maximum is {MAX_QUERY_LENGTH}). "
+            "Please shorten your request."
+        )
+    if _INJECTION_RE.search(query):
+        raise ValueError(
+            "Your query contains a pattern that looks like an instruction override and cannot be processed. "
+            "Please describe what music you'd like to hear."
+        )
+    return query
 
 
 def format_recommendation_table(table_rows: list[list[str]]) -> str:
@@ -99,6 +133,38 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="When used with --json, omit the rendered llm_prompt string from the output.",
     )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="WARNING",
+        help="Set the log verbosity level (default: WARNING). Use DEBUG or INFO for detailed output.",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        metavar="PATH",
+        help="Optional path to write log output to a file in addition to stderr.",
+    )
+    parser.add_argument(
+        "--persona",
+        choices=VALID_PERSONAS,
+        default="baseline",
+        help=(
+            "LLM output style persona. 'baseline' uses the default system prompt. "
+            "'critic', 'dj', and 'friend' inject few-shot examples that steer the "
+            "model's tone without any weight updates (default: baseline)."
+        ),
+    )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        help=(
+            "Run the agentic workflow: executes the pipeline as a multi-step "
+            "reasoning chain and prints each observable intermediate step "
+            "(sanitize → parse → plan → retrieve → rank → generate). "
+            "Compatible with --json, --strategy, and --persona."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -122,7 +188,10 @@ def _serialize_recommendations(recommendations: list[tuple[dict, float, str]]) -
 
 def main() -> None:
     args = parse_args()
+    configure_logging(level=args.log_level, log_file=args.log_file)
+
     songs = load_songs("data/songs_dataset_full.csv")
+    logger.info("Loaded %d songs from dataset.", len(songs))
     retrieval_layer = RetrievalLayer(songs)
     strategy_options = available_strategy_names()
 
@@ -135,6 +204,50 @@ def main() -> None:
     if not query:
         query = "I want something chill for studying, similar to Bon Iver"
         print(f"Using default prompt: {query}\n")
+
+    try:
+        query = sanitize_query(query)
+    except ValueError as exc:
+        if args.json:
+            _print_json({"error": str(exc)})
+            return
+        raise SystemExit(str(exc)) from exc
+
+    # ------------------------------------------------------------------ #
+    # Agentic mode — multi-step reasoning chain with observable steps      #
+    # ------------------------------------------------------------------ #
+    if args.agent:
+        agent = MusicRecommenderAgent(
+            songs,
+            persona=args.persona,
+            strategy_override=args.strategy,
+            llm_enabled=(args.mode != "retrieval-only"),
+        )
+        trace = agent.run(query, sanitized=True)
+
+        if args.json:
+            _print_json(trace.to_dict())
+            return
+
+        # Human-readable trace output
+        print()
+        print(trace.summary())
+
+        if trace.llm_text:
+            print("\nLLM-generated narrative:\n")
+            print(trace.llm_text)
+
+        if trace.recommendations:
+            table_rows = [
+                [i + 1, s.get("title"), s.get("artist"), s.get("genre"), f"{sc:.2f}", ex]
+                for i, (s, sc, ex) in enumerate(trace.recommendations)
+            ]
+            print("\nTop recommendations:\n")
+            print(format_recommendation_table(table_rows))
+            if not args.json:
+                _offer_spotify_playlist(trace.recommendations, query)
+        return
+    # ------------------------------------------------------------------ #
 
     strategy_mode = args.strategy
     if args.mode != "retrieval-only" and args.strategy is None:
@@ -155,6 +268,7 @@ def main() -> None:
     if args.mode == "llm-only" and not args.json and not llm_is_configured():
         raise SystemExit("LLM mode requires LLM_API_KEY or OPENAI_API_KEY to be set.")
 
+    logger.info("Running recommendation pipeline (mode=%s, strategy=%s).", args.mode, strategy_mode)
     retrieval_context = retrieval_layer.retrieve(query, candidate_limit=15, similar_artist_limit=5)
     result_payload = {
         "prompt": query,
@@ -190,8 +304,11 @@ def main() -> None:
                 llm_recommendation_text = generate_grounded_recommendation_text(
                     retrieval_context,
                     recommendation_count=5,
+                    catalog_songs=songs,
+                    persona=args.persona,
                 )
             except RuntimeError as exc:
+                logger.error("LLM recommendation failed: %s", exc)
                 result_payload["error"] = str(exc)
                 if not args.json:
                     print("\nLLM recommendation call failed:\n")
@@ -221,6 +338,7 @@ def main() -> None:
     candidate_songs = candidate_tracks_to_song_dicts(retrieval_context) or songs
 
     recommendations = recommend_songs(user_prefs, candidate_songs, k=5, strategy_name=strategy_mode)
+    logger.info("Scoring produced %d recommendation(s) using strategy %r.", len(recommendations), strategy_mode)
     result_payload["local_recommendations"] = _serialize_recommendations(recommendations)
 
     table_rows = []

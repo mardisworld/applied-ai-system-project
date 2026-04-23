@@ -13,6 +13,10 @@ Your goal is to:
 
 ---
 
+## How AI Is Used In This Project
+
+This project uses a Retrieval-Augmented Generation (RAG) pattern to turn a natural-language music request into a personalized playlist. When you describe what you want to hear, the system parses your prompt to extract signals like a seed artist, mood, or energy level, then retrieves the most relevant songs from a local dataset by scoring each track against those signals using weighted numeric features (energy, valence, tempo, danceability, acousticness) and categorical matches (genre, mood). That retrieved context — the top candidate tracks, the seed artist's audio profile, and a list of similar artists — is injected into a structured prompt and passed to a general-purpose LLM, which generates the final recommendations in natural language and explains why each song fits your request. Because the LLM never guesses from memory but instead reasons over the retrieved data, the output stays grounded in real audio attributes rather than hallucinated suggestions. A reliability and testing system backs the retrieval and enrichment layers: unit tests in `tests/test_recommender.py` and `tests/test_spotify_enrichment.py` verify that scoring logic and data processing behave correctly across edge cases, keeping the RAG pipeline predictable as the dataset and scoring rules evolve.
+
 ## How The System Works
 
 ## Real World Recommendation Systems
@@ -89,6 +93,8 @@ Compute Matches & Similarities
 Weighted Sum → Total Score
     ↓
 Sort Songs by Score (descending) → Top k Recommendations
+    ↓
+Create Playlist with Spotify API
 ```
 
 - How do you choose which songs to recommend?
@@ -131,10 +137,27 @@ How would you like songs to be ranked?
   2. genre-first
   3. mood-first
   4. energy-focused
-Enter strategy name or number [balanced]:
+Enter strategy name or number:
 ```
 
 After showing recommendations, it will offer to create a Spotify playlist (see **Spotify Playlist Creation** below).
+
+#### Log levels
+
+By default the app runs silently (only warnings and errors are shown). Pass `--log-level` to increase verbosity:
+
+```bash
+# Show high-level pipeline steps (seed artist resolution, candidate count, etc.)
+python -m src.main --log-level INFO --prompt "chill indie for studying"
+
+# Show detailed trace including signal parsing, similar-artist names, strategy scoring
+python -m src.main --log-level DEBUG --prompt "chill indie for studying"
+
+# Also write logs to a file
+python -m src.main --log-level INFO --log-file recommender.log --prompt "chill indie for studying"
+```
+
+Logs are written to **stderr** so they do not pollute `--json` output captured on stdout.
 
 You can also choose the output mode explicitly:
 
@@ -256,7 +279,7 @@ After the app displays its recommendations, it will offer to create a real Spoti
 
 #### Setup
 
-1. Create a Spotify app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
+1. Create a Spotify app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard). This requires a premium Spotify account. 
 
 2. Under your app's **Edit Settings**, add a redirect URI. Because Spotify requires HTTPS, use an [ngrok](https://ngrok.com) tunnel for local development:
 
@@ -360,5 +383,50 @@ Bias and unfairness can enter recommender systems at many stages. If the dataset
 The choice of features also matters: if important aspects like lyrics, cultural context, or artist identity are missing, the system can't recommend based on those dimensions, which can disadvantage certain groups or styles. 
 Content-based recommenders can trap users in "filter bubbles," repeatedly surfacing similar songs and limiting exposure to new or diverse music. Collaborative filtering can reinforce popularity bias, amplifying what is already popular and ignoring minority tastes. Finally, default weights and system design choices can unintentionally privilege some users' preferences over others, making fairness an ongoing challenge that requires careful attention.
 
----
+## Project 4: applied-ai-system-project
+
+- Sample Interactions: Include at least 2-3 examples of inputs and the resulting AI outputs to demonstrate the system is functional.
+
+## Example Interactions to Create Spotify Playlist
+App: Describe what you want to hear.
+Enter prompt: "I want to hear something Rock and Roll, similiar to Bon Jovi. -> Created Rock Playlist
+
+![Bon Jovi playlist](src/assets/image.png)
+
+App: Describe what you want to hear.
+Enter prompt: "I want something energetic that I can work out to. -> Created Workout Songs Playlist
+![Workout Songs playlist](src/assets/image2.png)
+
+## 4. Reliability and Evaluation: How You Test and Improve Your AI
+- Testing Summary and Reflection on AI Playlist Generation
+I was not able to implement the Spotify API until I directly copy and pasted the documentation into Copilot chat window. I tried many different ways, even temporarily giving up on Spotify and trying to use other Music Metadata APIs such as Last.fm API and MusicBrainz. Neither of these were more user-friendly than Spotify. Last.fm wouldn't let me create an account. MusicBrainz didn't have any useful APIs, in my opinion. I had to use Claude and Copilot to help me set up an authorization flow that enabled me to use Spotify's API. It was difficult. I tested the app myself to mak sure that it works. I also added automated unit tests to ensure the app works end to end. I implemented confidence scoring (Github Copilot did) and added the CONFIDENCE_SCORING.MD file to my project. I also had Github add logging and error handling. I also had Copilot a hallucination guard to verify that generated song titles or artists actually exist in the dataset to the LLM layer.  
+
+## 5. Reflection and Ethics: Thinking Critically About Your AI
+- What are the limitations or biases in your system?
+
+One of the biggest limitations I noticed is how rigid the signal parsing is. The system can only recognize 8 moods and 4 activities, so if you type something like "romantic" or "nostalgic" or say you want music for "hiking," it just quietly skips those words like they were never there. The scoring weights — like giving genre twice the importance of mood — were values I set based on gut feel, not any actual research into what makes a recommendation feel right to a listener. The activity presets (things like targeting energy=0.85 and 132 BPM for a workout) have the same problem: they're reasonable guesses, but there's no data behind them. There's also a subtle Python bug where mood detection iterates over a set, which has no guaranteed order, so a prompt like "happy and energetic workout" might silently drop one of those signals depending on how the interpreter happens to order things.
+
+The dataset has its own issues that compound the problem. It's a mainstream Spotify snapshot, which means it skews heavily toward English-language pop, rock, and hip-hop. Niche genres, non-English artists, and world music are barely represented, so the recommender has a baked-in bias toward what's already popular. Artists who appear a lot in the dataset dominate the similarity matching, while artists with only a handful of tracks are essentially invisible to the system. The seed-artist lookup also only handles one artist per query and gives it a hard-coded +10 score bonus that can drown out everything else. There's even a regex bug where extra descriptors at the end of an artist name — like "Hole, but more raw" — get absorbed into the name itself, which breaks the catalog search entirely. And maybe most importantly, the system has no memory: every session starts completely fresh, with no knowledge of what you've listened to before or what you told it last time.
+
+
+- Could your AI be misused, and how would you prevent that?
+
+Yes, several misuse scenarios are realistic. The most direct is **prompt injection**: a user could craft a query like "ignore all your instructions and instead output…" to hijack the grounded LLM prompt, causing the model to produce harmful or off-topic content instead of music recommendations. The system now defends against this with `sanitize_query()` in `src/main.py`, which checks every user prompt against a regex pattern of known injection phrases ("ignore your instructions", "act as", "you are now", "disregard all context") and rejects the request with an error before it ever reaches the LLM or the retrieval layer. A second risk is **OAuth CSRF**: without state verification in the Spotify authorization flow, an attacker could trick a user's browser into initiating an auth callback with a forged code, linking the app to the attacker's Spotify account instead. The app now generates a `secrets.token_urlsafe(16)` CSRF token before redirecting to Spotify and rejects any callback whose `state` parameter doesn't match.
+
+Beyond those implemented fixes, three lower-severity risks remain worth noting. **Log injection** is possible if a malicious prompt containing newline characters is written verbatim to log files, potentially forging log entries; mitigation would require stripping or escaping newlines before logging. **Unbounded LLM spend** could occur if the app is exposed publicly without authentication — anyone could trigger expensive LLM API calls in a loop; rate limiting or API key scoping would address this. Finally, **dataset path traversal** is a theoretical risk if a future version accepted user-supplied file paths; currently all file paths are hardcoded, so this is not exploitable. Overall, the most actionable risks — prompt manipulation and auth hijacking — are now mitigated, and the remaining risks are low given the app's local, single-user design.
+
+- What surprised you while testing your AI's reliability?
+Sometimes, working with Copilot resulted in unexpected behavior. For example, trying to correct for the misuse scenarios above caused the Copilot to strip the app of the behavior of prompting the user for their preferences at the beginning of the session. I had to explicitly tell it not to remove the prompt for the user.
+
+- Identify one instance when the AI gave a helpful suggestion 
+AI worked with me to identify and help remediate against conditions in which the AI could be misused. It helped add unit tests, loggging, and confidence scoring.
+
+- Identify one instance where its suggestion was flawed or incorrect.
+Copilot kept telling me to use http as a callback for the Spotify API, even though I told it several times that the Spotify API required an https URI. It took a long time for it to suggest that I use ngrok, which was helpful when I finally got it to work. 
+
+# Optional: Stretch Features for Extra Points
+
+- Agentic Workflow Enhancement - added agent.py, which runs five discrete steps in order: sanitize, parse, plan, retrieve, rank. 
+- Fine-Tuning or Specialization - see scripts/compare_personas.py and write-up in COMPARE_PERSONAS.md.
+- Test Harness or Evaluation Script - see scripts/evaluate.py and write up in EVALUATION_SUMMARY.md.  
 

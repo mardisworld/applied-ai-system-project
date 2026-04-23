@@ -25,6 +25,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import secrets
 import webbrowser
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -32,6 +33,9 @@ from typing import Any, Dict, List, Optional
 from urllib import error, parse, request
 
 from src.env_loader import load_project_env
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -103,8 +107,10 @@ def _post_form(
             return json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
+        logger.error("Spotify token request failed HTTP %d: %s", exc.code, body_text[:200])
         raise RuntimeError(f"Spotify request failed with HTTP {exc.code}: {body_text}") from exc
     except error.URLError as exc:
+        logger.error("Spotify token request connection error: %s", exc.reason)
         raise RuntimeError(f"Spotify request failed: {exc.reason}") from exc
 
 
@@ -134,8 +140,10 @@ def _api_request(
             return json.loads(raw) if raw.strip() else {}
     except error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
+        logger.error("Spotify API %s %s failed HTTP %d: %s", method, endpoint, exc.code, body_text[:200])
         raise RuntimeError(f"Spotify API request failed with HTTP {exc.code}: {body_text}") from exc
     except error.URLError as exc:
+        logger.error("Spotify API %s %s connection error: %s", method, endpoint, exc.reason)
         raise RuntimeError(f"Spotify API request failed: {exc.reason}") from exc
 
 
@@ -214,7 +222,8 @@ def exchange_code_for_token(
     if not creds.redirect_uri:
         raise ValueError("SPOTIFY_REDIRECT_URI must be set for the Authorization Code flow.")
 
-    return _post_form(
+    logger.info("Exchanging authorization code for access token.")
+    result = _post_form(
         SPOTIFY_TOKEN_URL,
         body={
             "grant_type": "authorization_code",
@@ -226,6 +235,10 @@ def exchange_code_for_token(
             "Content-Type": "application/x-www-form-urlencoded",
         },
     )
+    token_type = result.get("token_type", "unknown")
+    expires_in = result.get("expires_in", "?")
+    logger.info("Access token received (type=%s, expires_in=%ss).", token_type, expires_in)
+    return result
 
 
 def refresh_access_token(
@@ -266,11 +279,17 @@ def run_local_auth_flow(
 
     redirect_uri = creds.redirect_uri or f"http://localhost:{port}/callback"
     default_scopes = ["playlist-modify-public", "playlist-modify-private", "user-read-private"]
+
+    # Generate a CSRF state token and verify it in the callback to prevent
+    # cross-site request forgery attacks on the OAuth flow.
+    csrf_state = secrets.token_urlsafe(16)
+
     params = {
         "client_id": creds.client_id,
         "response_type": "code",
         "redirect_uri": redirect_uri,
         "scope": " ".join(scopes or default_scopes),
+        "state": csrf_state,
     }
     auth_url = f"{SPOTIFY_AUTH_URL}?{parse.urlencode(params)}"
 
@@ -280,10 +299,19 @@ def run_local_auth_flow(
     class _CallbackHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             qs = parse.parse_qs(parse.urlparse(self.path).query)
+            returned_state = (qs.get("state") or [""])[0]
             captured["code"] = (qs.get("code") or [""])[0]
             captured["error"] = (qs.get("error") or [""])[0]
 
-            if captured.get("code"):
+            if returned_state != csrf_state:
+                captured["code"] = ""
+                captured["error"] = "state_mismatch"
+                body = (
+                    b"<html><body><h2>Authorization failed.</h2>"
+                    b"<p>State mismatch - possible CSRF attack. Please try again.</p></body></html>"
+                )
+                self.send_response(400)
+            elif captured.get("code"):
                 body = (
                     b"<html><body><h2>Authorization successful!</h2>"
                     b"<p>You can close this tab and return to the terminal.</p></body></html>"
@@ -345,6 +373,7 @@ def search_tracks(
     limit: int = 10,
 ) -> List[Dict[str, Any]]:
     """Search for tracks by query string. Returns normalized track dicts."""
+    logger.debug("Searching Spotify tracks: %r (limit=%d)", query, limit)
     payload = _api_request(
         "GET",
         "/search",
@@ -371,6 +400,7 @@ def search_tracks(
                 "external_url": ((item.get("external_urls") or {}).get("spotify")),
             }
         )
+    logger.debug("Spotify search returned %d result(s) for %r.", len(tracks), query)
     return tracks
 
 
@@ -391,6 +421,7 @@ def create_playlist(
     Authorization Code flow with the ``playlist-modify-public`` or
     ``playlist-modify-private`` scope granted.
     """
+    logger.info("Creating Spotify playlist: %r (public=%s)", name, public)
     payload = _api_request(
         "POST",
         "/me/playlists",
@@ -402,13 +433,15 @@ def create_playlist(
         },
     )
 
-    return {
+    playlist = {
         "id": payload.get("id"),
         "name": payload.get("name"),
         "url": ((payload.get("external_urls") or {}).get("spotify")),
         "uri": payload.get("uri"),
         "public": payload.get("public"),
     }
+    logger.info("Playlist created: id=%r url=%r", playlist["id"], playlist["url"])
+    return playlist
 
 
 def add_tracks_to_playlist(
@@ -422,14 +455,17 @@ def add_tracks_to_playlist(
     you have more.
     """
     if not track_uris:
+        logger.debug("add_tracks_to_playlist called with empty URI list; skipping API call.")
         return
 
+    logger.info("Adding %d track(s) to playlist %r.", len(track_uris[:100]), playlist_id)
     _api_request(
         "POST",
         f"/playlists/{playlist_id}/items",
         access_token=access_token,
         body={"uris": track_uris[:100]},
     )
+    logger.debug("Tracks successfully added to playlist %r.", playlist_id)
 
 
 def get_current_user(access_token: str) -> Dict[str, Any]:

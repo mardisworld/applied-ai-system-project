@@ -6,6 +6,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from src.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 DEFAULT_INPUT_PATH = Path("data/dataset.csv")
 DEFAULT_OUTPUT_PATH = Path("data/song_artist_metadata.csv")
@@ -175,10 +179,15 @@ def write_rows(output_path: Path, rows: List[Dict[str, Any]]) -> None:
 
 
 def run(input_path: Path, output_path: Path, limit: int | None = None) -> int:
+    logger.info("Reading dataset from %s.", input_path)
     all_dataset_rows = read_dataset_rows(input_path)
+    logger.info("Read %d row(s) from dataset.", len(all_dataset_rows))
     dataset_rows = all_dataset_rows[:limit] if limit is not None else all_dataset_rows
+    if limit is not None:
+        logger.debug("Applying row limit: processing first %d of %d row(s).", len(dataset_rows), len(all_dataset_rows))
     enriched_rows = build_local_artist_metadata_rows(dataset_rows)
     write_rows(output_path, enriched_rows)
+    logger.info("Wrote %d enriched row(s) to %s.", len(enriched_rows), output_path)
     return len(enriched_rows)
 
 
